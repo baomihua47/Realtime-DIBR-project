@@ -703,20 +703,45 @@ bool Application::RenderTarget(bool nextVideoFrame)
 
 void Application::RenderScene(int i, bool isFirstInput)
 {
+	// === 新增：JBF 相關 (執行濾波並取得新深度圖) ===
+	// 計算 chroma_offset (確保與 YUV 解析度匹配)
+	int luma_height = inputCameras[i].res_y;
+	int luma_height_rounded = ((luma_height + 16 - 1) / 16) * 16;
+	float chroma_offset = float(luma_height_rounded - luma_height);
+
+	// 呼叫我們在 FrameBufferController 新增的聯合雙邊濾波
+	framebuffers.applyJointBilateralFilter(
+		shaders, 
+		textures_color[i], 
+		textures_depth[i], 
+		inputCameras[i].res_x, 
+		inputCameras[i].res_y, 
+		options.jbfSigmaSpatial, 
+		options.jbfSigmaColor, 
+		!options.usePNGs,
+		chroma_offset
+	);
+
+	// 取得高品質的深度圖
+	GLuint filteredDepthTex = framebuffers.getFilteredDepthTexture();
+
+	// 恢復 3D Warping 階段需要的 Viewport 解析度 (非常重要！)
+	glViewport(0, 0, m_nRenderWidth, m_nRenderHeight);
+	// ============================================
+
 	if (isFirstInput) {
-		// simple 3D warping
-		framebuffers.renderTheFirstInputImage(0, textures_color[i], textures_depth[i]);
+		// simple 3D warping (替換原本的 textures_depth[i] 為 filteredDepthTex)
+		framebuffers.renderTheFirstInputImage(0, textures_color[i], filteredDepthTex);
 	}
 	else {
 		// copying between FBOs is necessary to prepare the blending
 		shaders.copyShader.use();
 		framebuffers.copyFramebuffer(0);
 
-		// simple 3D warping + blending with the previous output image
+		// simple 3D warping + blending with the previous output image (替換為 filteredDepthTex)
 		shaders.shader.use();
-		framebuffers.renderNonFirstInputImage(0, textures_color[i], textures_depth[i]);
+		framebuffers.renderNonFirstInputImage(0, textures_color[i], filteredDepthTex);
 	}
-
 }
 
 void Application::RenderCompanionWindow()

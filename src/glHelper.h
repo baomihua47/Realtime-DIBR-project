@@ -16,7 +16,10 @@ public:
 	Shader copyShader; // shader for simply copying textures between FBOs
 	Shader companionWindowShader;  // shader for simply copying textures from a FBO to the screen
 	Shader cameraVisibilityShader; // shader to illustrate the positions of the cameras in a separate window
-
+	
+	// === 新增：JBF 相關 ===
+	Shader jbfShader;              // shader for Joint Bilateral Filtering of depth maps
+	// ======================
 
 public:
 	ShaderController() {
@@ -24,6 +27,10 @@ public:
 		shader = Shader();
 		copyShader = Shader();
 		companionWindowShader = Shader();
+		
+		// === 新增：JBF 相關 ===
+		jbfShader = Shader();
+		// ======================
 	}
 
 	bool init(InputCamera input, Options options, int out_width, int out_height, float chroma_offset, OutputCamera output) {
@@ -105,6 +112,19 @@ public:
 		companionWindowShader.use();
 		companionWindowShader.setInt("previousFBOColorTex", 0);
 
+		// === 新增：JBF 相關 ===
+		if (!jbfShader.init(
+			(basePath + "jbf_vertex.fs").c_str(),
+			(basePath + "jbf_fragment.fs").c_str())) {
+			std::cout << "failed to compile " << basePath + "jbf_vertex.fs"
+				<< " or " << basePath + "jbf_fragment.fs" << std::endl;
+			return false;
+		}
+		jbfShader.use();
+		jbfShader.setInt("colorTex", 0);
+		jbfShader.setInt("depthTex", 1);
+		// ======================
+
 		return true;
 	}
 
@@ -176,6 +196,11 @@ private:
 	float* inputCameraVertexPositions = NULL;
 	int offset = 0;
 
+	// === 新增：JBF 相關 ===
+	GLuint jbfFbo = 0;
+	GLuint jbfDepthTex = 0;
+	// ======================
+
 public:
 
 	FrameBufferController() {}
@@ -230,6 +255,24 @@ public:
 			// clear the second draw buffer seperately
 			glClearBufferfv(GL_COLOR, 1, initial_angle_and_depth);
 		}
+
+		// === 新增：JBF 相關 (建立 FBO 與 Texture) ===
+		glGenFramebuffers(1, &jbfFbo);
+		glGenTextures(1, &jbfDepthTex);
+		glBindFramebuffer(GL_FRAMEBUFFER, jbfFbo);
+
+		glBindTexture(GL_TEXTURE_2D, jbfDepthTex);
+		// 使用 GL_R32F 保存高精度深度資料
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, in_width, in_height, 0, GL_RED, GL_FLOAT, 0);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, jbfDepthTex, 0);
+
+		if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+			throw std::runtime_error("JBF Framebuffer not complete!");
+		}
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+		// ============================================
 
 		// Setup the trianglemesh that will be drawn (shared by all input cameras)
 		int triangleMeshWidth = in_width / options.triangleSizeInPixels;
@@ -420,11 +463,57 @@ public:
 		glDrawElementsBaseVertex(GL_LINES, 16, GL_UNSIGNED_INT, 0, offset);
 	}
 
+	// === 新增：JBF 相關 (濾波執行與紋理取得) ===
+	GLuint getFilteredDepthTexture() { 
+		return jbfDepthTex; 
+	}
+
+	void applyJointBilateralFilter(ShaderController& shaders, GLuint colorTex, GLuint depthTex, int in_width, int in_height, float sigmaSpatial, float sigmaColor, bool isYCbCr, float chroma_offset) {
+		glBindFramebuffer(GL_FRAMEBUFFER, jbfFbo);
+		glViewport(0, 0, in_width, in_height); // 使用輸入影像解析度
+
+		// 關閉深度測試，因為我們只是做 2D 影像處理
+		glDisable(GL_DEPTH_TEST); 
+		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+		glClear(GL_COLOR_BUFFER_BIT);
+
+		shaders.jbfShader.use();
+		
+		// 傳遞 Uniforms
+		shaders.jbfShader.setInt("colorTex", 0);
+		shaders.jbfShader.setInt("depthTex", 1);
+		shaders.jbfShader.setFloat("width", (float)in_width);
+		shaders.jbfShader.setFloat("height", (float)in_height);
+		shaders.jbfShader.setFloat("isYCbCr", isYCbCr ? 1.0f : 0.0f);
+		shaders.jbfShader.setFloat("chroma_offset", chroma_offset);
+		shaders.jbfShader.setFloat("sigmaSpatial", sigmaSpatial);
+		shaders.jbfShader.setFloat("sigmaColor", sigmaColor);
+
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, colorTex);
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_2D, depthTex);
+
+		// 使用畫滿全螢幕的四邊形來進行濾波渲染
+		glBindVertexArray(quadVAO);
+		glDrawArrays(GL_TRIANGLES, 0, 6);
+		
+		// 恢復深度測試，還原狀態給 3D Warping
+		glEnable(GL_DEPTH_TEST);
+	}
+	// ============================================
+
 	void cleanup() {
 		glDeleteFramebuffers(nrFramebuffers, framebuffers);
 		glDeleteTextures(nrFramebuffers, outputTexColors);
 		glDeleteTextures(nrFramebuffers, outputTexAngleAndDepth);
 		glDeleteRenderbuffers(nrFramebuffers, depthrenderbuffers);
+		
+		// === 新增：JBF 相關 ===
+		glDeleteFramebuffers(1, &jbfFbo);
+		glDeleteTextures(1, &jbfDepthTex);
+		// ======================
+		
 		glDeleteVertexArrays(1, &VAO);
 		glDeleteBuffers(1, &VBO);
 		glDeleteBuffers(1, &EBO);

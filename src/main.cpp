@@ -22,6 +22,8 @@ std::string cmakelists_dir = CMAKELISTS_SOURCE_DIR;
 class Options {
 public:
 	// all Option members are set through the command line args
+	float jbfSigmaSpatial = 5.0f;
+	float jbfSigmaColor = 0.1f;
 
 	std::string inputPath;             // path to folder that contains the light field dataset
 	std::string inputJsonPath;         // path to the .json with the input light field camera parameters
@@ -88,6 +90,8 @@ public:
 			("frame_nr", "The frame that needs to be shown if the input light field consists of videos and option \'--static\' is set", cxxopts::value<int>()->default_value("0"))
 			;
 		options.add_options("Settings to improve performance")
+		    ("jbf_spatial", "Spatial sigma for Joint Bilateral Filter", cxxopts::value<float>()->default_value("5.0"))
+			("jbf_color", "Color sigma for Joint Bilateral Filter", cxxopts::value<float>()->default_value("0.1"))
 			("t", "Number of threads for the thread pool that decodes the videos. Should be >= 2. Recommended: #CPUcores - 1", cxxopts::value<int>()->default_value("2"))
 			("asap", "Decode and play the image/video frames as soon as possible (basically disabling the Vsync@90Hz)")
 			("max_nr_inputs", "The maximum number of input images/videos that will be processed per frame (-1 if all need to be processed)", cxxopts::value<int>()->default_value("-1"))
@@ -197,6 +201,12 @@ public:
 				std::cout << "Option --blending_factor should be an int in [0,10]" << std::endl;
 				exit(-1);
 			}
+		}
+		if (result.count("jbf_spatial")) {
+			jbfSigmaSpatial = result["jbf_spatial"].as<float>();
+		}
+		if (result.count("jbf_color")) {
+			jbfSigmaColor = result["jbf_color"].as<float>();
 		}
 		if (result.count("triangle_deletion_margin")) {
 			triangle_deletion_margin = result["triangle_deletion_margin"].as<float>();
