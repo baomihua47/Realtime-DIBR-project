@@ -698,6 +698,10 @@ bool Application::RenderTarget(bool nextVideoFrame)
 		}
 	}
 
+	// === 新增：在所有視角 3D Warping 結束後，統一執行空洞填補 ===
+	framebuffers.applyHoleFilling(shaders, framebuffers.getColorTexture(0), framebuffers.getWarpedDepthTexture(0), m_nRenderWidth, m_nRenderHeight);
+	// ==============================================================
+
 	return true;
 }
 
@@ -755,7 +759,11 @@ void Application::RenderCompanionWindow()
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
 	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, framebuffers.getColorTexture(0));
+	
+	// === 修改：從 Hole Filling 輸出的紋理進行顯示 ===
+	glBindTexture(GL_TEXTURE_2D, framebuffers.getHoleFilledTexture());
+	// ==============================================
+
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -785,8 +793,18 @@ void Application::RenderCompanionWindow()
 
 void Application::SaveCompanionWindowToYUV(int frameNr, std::string outputCameraName, bool saveAsPNG) {
 	unsigned char* image = new unsigned char[options.SCR_WIDTH * options.SCR_HEIGHT * 4];
-	framebuffers.bindCurrentBuffer();
+	
+	// === 修改：使用暫時的 FBO 來讀取 Hole Filling 的紋理像素 ===
+	GLuint tempFBO;
+	glGenFramebuffers(1, &tempFBO);
+	glBindFramebuffer(GL_FRAMEBUFFER, tempFBO);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, framebuffers.getHoleFilledTexture(), 0);
+
 	glReadPixels(0, 0, options.SCR_WIDTH, options.SCR_HEIGHT, GL_RGBA, GL_UNSIGNED_BYTE, image);
+	
+	glDeleteFramebuffers(1, &tempFBO);
+	// =========================================================
+
 	if (saveAsPNG || options.usePNGs) {
 		saveImage(image, options.SCR_WIDTH, options.SCR_HEIGHT, true, frameNr, options.outputPath + outputCameraName + ".png");
 	}
@@ -796,5 +814,4 @@ void Application::SaveCompanionWindowToYUV(int frameNr, std::string outputCamera
 	delete[] image;
 	return;
 }
-
 #endif APPLICATION_H

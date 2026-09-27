@@ -1,0 +1,54 @@
+#version 430 core
+layout(local_size_x = 1, local_size_y = 1) in;
+
+layout(std430, binding = 1) buffer HistogramBuffer {
+    uint histogram[256];
+};
+
+layout(std430, binding = 2) buffer OtsuResultBuffer {
+    float u_OtsuThreshold;
+};
+
+void main() {
+    float totalPixels = 0.0;
+    float sum = 0.0;
+    for (int i = 0; i < 256; i++) {
+        float count = float(histogram[i]);
+        totalPixels += count;
+        sum += float(i) * count;
+    }
+
+    if (totalPixels == 0.0) {
+        u_OtsuThreshold = 0.5; 
+        return;
+    }
+
+    float sumB = 0.0, wB = 0.0, wF = 0.0;
+    float maxVariance = -1.0;
+    int bestThresholdBin = 128;
+
+    for (int t = 0; t < 256; t++) {
+        float count = float(histogram[t]);
+        wB += count;
+        if (wB == 0.0) continue;
+        wF = totalPixels - wB;
+        if (wF == 0.0) break;
+
+        sumB += float(t) * count;
+        float mB = sumB / wB;
+        float mF = (sum - sumB) / wF;
+        float variance = wB * wF * (mB - mF) * (mB - mF);
+
+        if (variance > maxVariance) {
+            maxVariance = variance;
+            bestThresholdBin = t;
+        }
+    }
+
+    u_OtsuThreshold = float(bestThresholdBin) / 255.0;
+    
+    // 清空供下一幀使用
+    for (int i = 0; i < 256; i++) {
+        histogram[i] = 0u;
+    }
+}

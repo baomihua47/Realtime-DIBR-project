@@ -17,9 +17,15 @@ public:
 	Shader companionWindowShader;  // shader for simply copying textures from a FBO to the screen
 	Shader cameraVisibilityShader; // shader to illustrate the positions of the cameras in a separate window
 	
-	// === 新增：JBF 相關 ===
+	// === JBF 相關 ===
 	Shader jbfShader;              // shader for Joint Bilateral Filtering of depth maps
 	// ======================
+
+	// === 新增：Hole Filling 相關著色器 ===
+	Shader otsuHistShader;
+	Shader otsuCalcShader;
+	Shader holeFillingShader;
+	// =====================================
 
 public:
 	ShaderController() {
@@ -27,10 +33,10 @@ public:
 		shader = Shader();
 		copyShader = Shader();
 		companionWindowShader = Shader();
-		
-		// === 新增：JBF 相關 ===
 		jbfShader = Shader();
-		// ======================
+		otsuHistShader = Shader();
+		otsuCalcShader = Shader();
+		holeFillingShader = Shader();
 	}
 
 	bool init(InputCamera input, Options options, int out_width, int out_height, float chroma_offset, OutputCamera output) {
@@ -112,7 +118,7 @@ public:
 		companionWindowShader.use();
 		companionWindowShader.setInt("previousFBOColorTex", 0);
 
-		// === 新增：JBF 相關 ===
+		// === JBF 相關 ===
 		if (!jbfShader.init(
 			(basePath + "jbf_vertex.fs").c_str(),
 			(basePath + "jbf_fragment.fs").c_str())) {
@@ -124,6 +130,22 @@ public:
 		jbfShader.setInt("colorTex", 0);
 		jbfShader.setInt("depthTex", 1);
 		// ======================
+
+		// === 新增：Hole Filling 相關著色器初始化 ===
+		// (注意：需要確定 shader.h 中有實作 initCompute 函式)
+		if (!otsuHistShader.initCompute((basePath + "otsu_hist.comp").c_str())) {
+			std::cout << "failed to compile otsu_hist.comp" << std::endl;
+			return false;
+		}
+		if (!otsuCalcShader.initCompute((basePath + "otsu_calc.comp").c_str())) {
+			std::cout << "failed to compile otsu_calc.comp" << std::endl;
+			return false;
+		}
+		if (!holeFillingShader.init((basePath + "holefilling_vertex.fs").c_str(), (basePath + "holefilling_fragment.fs").c_str())) {
+			std::cout << "failed to compile holefilling shaders" << std::endl;
+			return false;
+		}
+		// ============================================
 
 		return true;
 	}
@@ -151,22 +173,6 @@ public:
 	}
 };
 
-/*
-* The FrameBufferController initializes the OpenGL FBOs, VAOs, VBOs, EBOs (in init()) and
-* sets up the calls to glDrawElements().
-* It has a system for constantly re-using the same 3 (per eye) FBOs , in order to save memory.
-* 
-* Example with n input cameras:
-*   1. 3D warp the 1st input camera 
-*         -> input  = 1 color texture + 1 depth texture
-*         -> output = 1 color texture + 1 depth+angle texture, written to FBO_0 (angle is used for weighted blending)
-*   2. copy the previous 2 outputs from FBO_0 to FBO_1
-*         -> input  = 1 color texture + 1 depth+angle texture from FBO_0
-*         -> output = 1 color texture + 1 depth+angle texture, written to FBO_1
-*   3. 3D warp the 2nd input camera: see step 1., however now with output FBO_1. In this way, the previous intermediate output textures
-*      are overwritten if the depth of the 2nd input camera is lower than the 1st, or if the depth is the same but the angle is smaller.
-*   4. for 3rd, 4th, ... input cameras, repeat step 2. and 3.
-*/
 class FrameBufferController {
 private:
 	// FBOs:
@@ -196,10 +202,17 @@ private:
 	float* inputCameraVertexPositions = NULL;
 	int offset = 0;
 
-	// === 新增：JBF 相關 ===
+	// === JBF 相關 ===
 	GLuint jbfFbo = 0;
 	GLuint jbfDepthTex = 0;
 	// ======================
+
+	// === 新增：Hole Filling 相關 ===
+	GLuint ssboHistogram = 0;
+	GLuint ssboOtsu = 0;
+	GLuint holeFillingFbo = 0;
+	GLuint holeFillingColorTex = 0;
+	// ===============================
 
 public:
 
@@ -236,8 +249,6 @@ public:
 			glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, outputTexAngleAndDepth[i], 0);
 
 			// Add a depth test buffer
-			//GLuint depthrenderbuffer;
-			//glGenRenderbuffers(1, &depthrenderbuffer);
 			glBindRenderbuffer(GL_RENDERBUFFER, depthrenderbuffers[i]);
 			glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, out_width, out_height);
 			glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthrenderbuffers[i]);
@@ -256,13 +267,12 @@ public:
 			glClearBufferfv(GL_COLOR, 1, initial_angle_and_depth);
 		}
 
-		// === 新增：JBF 相關 (建立 FBO 與 Texture) ===
+		// === JBF 相關 (建立 FBO 與 Texture) ===
 		glGenFramebuffers(1, &jbfFbo);
 		glGenTextures(1, &jbfDepthTex);
 		glBindFramebuffer(GL_FRAMEBUFFER, jbfFbo);
 
 		glBindTexture(GL_TEXTURE_2D, jbfDepthTex);
-		// 使用 GL_R32F 保存高精度深度資料
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, in_width, in_height, 0, GL_RED, GL_FLOAT, 0);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -273,6 +283,36 @@ public:
 		}
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 		// ============================================
+
+		// === 新增：Hole Filling 相關 (建立 SSBO 與 FBO) ===
+		// 1. 深度直方圖 SSBO (256 個 Bin)
+		glGenBuffers(1, &ssboHistogram);
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssboHistogram);
+		glBufferData(GL_SHADER_STORAGE_BUFFER, 256 * sizeof(GLuint), NULL, GL_DYNAMIC_COPY);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, ssboHistogram);
+
+		// 2. Otsu 閾值 SSBO
+		glGenBuffers(1, &ssboOtsu);
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssboOtsu);
+		glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(GLfloat), NULL, GL_DYNAMIC_COPY);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, ssboOtsu);
+
+		// 3. Hole Filling 輸出的 FBO
+		glGenFramebuffers(1, &holeFillingFbo);
+		glGenTextures(1, &holeFillingColorTex);
+		glBindFramebuffer(GL_FRAMEBUFFER, holeFillingFbo);
+		
+		glBindTexture(GL_TEXTURE_2D, holeFillingColorTex);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, out_width, out_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, holeFillingColorTex, 0);
+
+		if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+			throw std::runtime_error("Hole Filling Framebuffer not complete!");
+		}
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+		// ==================================================
 
 		// Setup the trianglemesh that will be drawn (shared by all input cameras)
 		int triangleMeshWidth = in_width / options.triangleSizeInPixels;
@@ -409,6 +449,11 @@ public:
 	GLuint getColorTexture(int eyeOffset) {
 		return outputTexColors[index[eyeOffset] + (eyeOffset * 3)];
 	}
+	
+	// 提供 3D Warping 產生的深度圖給後續修補使用
+	GLuint getWarpedDepthTexture(int eyeOffset) {
+		return outputTexAngleAndDepth[index[eyeOffset] + (eyeOffset * 3)];
+	}
 
 	// simple 3D warping
 	void renderTheFirstInputImage(int eyeOffset, GLuint image, GLuint depth) {
@@ -463,7 +508,7 @@ public:
 		glDrawElementsBaseVertex(GL_LINES, 16, GL_UNSIGNED_INT, 0, offset);
 	}
 
-	// === 新增：JBF 相關 (濾波執行與紋理取得) ===
+	// === JBF 相關 (濾波執行與紋理取得) ===
 	GLuint getFilteredDepthTexture() { 
 		return jbfDepthTex; 
 	}
@@ -504,16 +549,66 @@ public:
 	}
 	// ============================================
 
+	// === 新增：Hole Filling 相關 (Otsu 與 16方向修補執行) ===
+	GLuint getHoleFilledTexture() {
+		return holeFillingColorTex;
+	}
+
+	void applyHoleFilling(ShaderController& shaders, GLuint warpedColorTex, GLuint warpedDepthTex, int out_width, int out_height) {
+		// --- 1. Compute Shader: Histogram ---
+		shaders.otsuHistShader.use();
+		// 將深度圖綁定為 ImageTexture (需與 FBO 定義的格式一致)
+		glBindImageTexture(0, warpedDepthTex, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RG32F);
+		glDispatchCompute((out_width + 15) / 16, (out_height + 15) / 16, 1);
+		glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+		// --- 2. Compute Shader: Otsu ---
+		shaders.otsuCalcShader.use();
+		glDispatchCompute(1, 1, 1);
+		glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+		// --- 3. Fragment Shader: Hole Filling ---
+		glBindFramebuffer(GL_FRAMEBUFFER, holeFillingFbo);
+		glViewport(0, 0, out_width, out_height);
+		glDisable(GL_DEPTH_TEST); 
+		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+		glClear(GL_COLOR_BUFFER_BIT);
+		
+		shaders.holeFillingShader.use();
+		shaders.holeFillingShader.setInt("warpedColorTex", 0);
+		shaders.holeFillingShader.setInt("warpedDepthTex", 1);
+		shaders.holeFillingShader.setFloat("width", (float)out_width);
+		shaders.holeFillingShader.setFloat("height", (float)out_height);
+
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, warpedColorTex);
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_2D, warpedDepthTex);
+
+		glBindVertexArray(quadVAO);
+		glDrawArrays(GL_TRIANGLES, 0, 6);
+		
+		glEnable(GL_DEPTH_TEST);
+	}
+	// ========================================================
+
 	void cleanup() {
 		glDeleteFramebuffers(nrFramebuffers, framebuffers);
 		glDeleteTextures(nrFramebuffers, outputTexColors);
 		glDeleteTextures(nrFramebuffers, outputTexAngleAndDepth);
 		glDeleteRenderbuffers(nrFramebuffers, depthrenderbuffers);
 		
-		// === 新增：JBF 相關 ===
+		// === JBF 相關 ===
 		glDeleteFramebuffers(1, &jbfFbo);
 		glDeleteTextures(1, &jbfDepthTex);
 		// ======================
+
+		// === 新增：Hole Filling 相關 ===
+		glDeleteFramebuffers(1, &holeFillingFbo);
+		glDeleteTextures(1, &holeFillingColorTex);
+		glDeleteBuffers(1, &ssboHistogram);
+		glDeleteBuffers(1, &ssboOtsu);
+		// ===============================
 		
 		glDeleteVertexArrays(1, &VAO);
 		glDeleteBuffers(1, &VBO);
