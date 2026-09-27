@@ -468,7 +468,7 @@ public:
 		return jbfDepthTex; 
 	}
 
-	void applyJointBilateralFilter(ShaderController& shaders, GLuint colorTex, GLuint depthTex, int in_width, int in_height, float sigmaSpatial, float sigmaColor, bool isYCbCr, float chroma_offset) {
+	void applyJointBilateralFilter(ShaderController& shaders, GLuint colorTex, GLuint depthTex, int in_width, int in_height, float sigmaSpatial, float sigmaColor,float edgeThreshold, bool isYCbCr, float chroma_offset) {
 		glBindFramebuffer(GL_FRAMEBUFFER, jbfFbo);
 		glViewport(0, 0, in_width, in_height); // 使用輸入影像解析度
 
@@ -488,6 +488,7 @@ public:
 		shaders.jbfShader.setFloat("chroma_offset", chroma_offset);
 		shaders.jbfShader.setFloat("sigmaSpatial", sigmaSpatial);
 		shaders.jbfShader.setFloat("sigmaColor", sigmaColor);
+		shaders.jbfShader.setFloat("edgeThreshold", edgeThreshold);
 
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, colorTex);

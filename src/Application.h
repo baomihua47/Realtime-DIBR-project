@@ -718,6 +718,7 @@ void Application::RenderScene(int i, bool isFirstInput)
 		inputCameras[i].res_y, 
 		options.jbfSigmaSpatial, 
 		options.jbfSigmaColor, 
+		options.jbfEdgeThreshold,
 		!options.usePNGs,
 		chroma_offset
 	);
