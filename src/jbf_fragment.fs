@@ -67,7 +67,7 @@ void main()
 
     float weightSum = 0.0;
     float depthSum = 0.0;
-    int kernelRadius = 6; // 9x9 採樣視窗
+    int kernelRadius = 2; // 採樣視窗
 
     // 4. 雙迴圈進行雙邊加權
     for(int y = -kernelRadius; y <= kernelRadius; y++) {
