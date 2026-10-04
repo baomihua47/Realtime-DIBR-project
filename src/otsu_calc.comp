@@ -1,0 +1,65 @@
+#version 430 core
+// 配合 C++ 端的 glDispatchCompute(1, 1, 1)，我們只用一個 Thread 來跑這 256 次迴圈
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 1) buffer HistogramBuffer {
+    uint histogram[256];
+};
+
+layout(std430, binding = 2) buffer OtsuResultBuffer {
+    float u_OtsuThreshold;
+};
+
+void main() {
+    // 1. 計算總有效像素數
+    float totalPixels = 0.0;
+    for (int i = 0; i < 256; ++i) {
+        totalPixels += float(histogram[i]);
+    }
+
+    // 若畫面中沒有有效深度（全黑洞），給定預設中位數門檻
+    if (totalPixels <= 0.0) {
+        u_OtsuThreshold = 0.5; 
+        return;
+    }
+
+    // 2. 計算全域期望值 (Total Mean)
+    float sum = 0.0;
+    for (int i = 0; i < 256; ++i) {
+        float p_i = float(histogram[i]) / totalPixels; // 計算機率 (0.0~1.0)，避免浮點數溢位
+        sum += float(i) * p_i;
+    }
+
+    // 3. 尋找最大類間變異數 (Between-Class Variance)
+    float wB = 0.0;
+    float sumB = 0.0;
+    float varMax = -1.0;
+    int threshold = 0;
+
+    for (int i = 0; i < 256; ++i) {
+        float p_i = float(histogram[i]) / totalPixels;
+        wB += p_i;               // 累積背景權重
+        
+        if (wB <= 0.0) continue; // 背景為空則跳過
+        
+        float wF = 1.0 - wB;     // 前景權重
+        if (wF <= 0.0) break;    // 前景為空則提早結束
+
+        sumB += float(i) * p_i;  // 累積背景總和
+
+        float mB = sumB / wB;              // 背景平均
+        float mF = (sum - sumB) / wF;      // 前景平均
+
+        // 計算類間變異數
+        float varBetween = wB * wF * (mB - mF) * (mB - mF);
+
+        // 更新最大變異數與對應的門檻
+        if (varBetween > varMax) {
+            varMax = varBetween;
+            threshold = i;
+        }
+    }
+
+    // 4. 輸出歸一化的門檻值 (0.0 ~ 1.0)
+    u_OtsuThreshold = float(threshold) / 255.0;
+}

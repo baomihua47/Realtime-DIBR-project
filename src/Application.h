@@ -698,25 +698,63 @@ bool Application::RenderTarget(bool nextVideoFrame)
 		}
 	}
 
+	// === 新增：在所有視角 3D Warping 結束後，統一執行空洞填補 ===
+	framebuffers.applyHoleFilling(
+		shaders, 
+		framebuffers.getColorTexture(0), 
+		framebuffers.getWarpedDepthTexture(0), 
+		m_nRenderWidth, 
+		m_nRenderHeight,
+		pcOutputCamera.z_near, 
+		pcOutputCamera.z_far
+	);
+	// ==============================================================
+
 	return true;
 }
 
 void Application::RenderScene(int i, bool isFirstInput)
 {
+	// === 新增：JBF 相關 (執行濾波並取得新深度圖) ===
+	// 計算 chroma_offset (確保與 YUV 解析度匹配)
+	int luma_height = inputCameras[i].res_y;
+	int luma_height_rounded = ((luma_height + 16 - 1) / 16) * 16;
+	float chroma_offset = float(luma_height_rounded - luma_height);
+
+	// 呼叫我們在 FrameBufferController 新增的聯合雙邊濾波
+	framebuffers.applyJointBilateralFilter(
+		shaders, 
+		textures_color[i], 
+		textures_depth[i], 
+		inputCameras[i].res_x, 
+		inputCameras[i].res_y, 
+		options.jbfSigmaSpatial, 
+		options.jbfSigmaColor, 
+		options.jbfEdgeThreshold,
+		!options.usePNGs,
+		chroma_offset
+	);
+
+	// 取得高品質的深度圖
+	GLuint filteredDepthTex = framebuffers.getFilteredDepthTexture();
+
+	// 恢復 3D Warping 階段需要的 Viewport 解析度 (非常重要！)
+	glViewport(0, 0, m_nRenderWidth, m_nRenderHeight);
+	// ============================================
+
 	if (isFirstInput) {
-		// simple 3D warping
-		framebuffers.renderTheFirstInputImage(0, textures_color[i], textures_depth[i]);
+		// simple 3D warping (替換原本的 textures_depth[i] 為 filteredDepthTex)
+		framebuffers.renderTheFirstInputImage(0, textures_color[i], filteredDepthTex);
 	}
 	else {
 		// copying between FBOs is necessary to prepare the blending
 		shaders.copyShader.use();
 		framebuffers.copyFramebuffer(0);
 
-		// simple 3D warping + blending with the previous output image
+		// simple 3D warping + blending with the previous output image (替換為 filteredDepthTex)
 		shaders.shader.use();
-		framebuffers.renderNonFirstInputImage(0, textures_color[i], textures_depth[i]);
+		framebuffers.renderNonFirstInputImage(0, textures_color[i], filteredDepthTex);
 	}
-
 }
 
 void Application::RenderCompanionWindow()
@@ -729,7 +767,11 @@ void Application::RenderCompanionWindow()
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
 	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, framebuffers.getColorTexture(0));
+	
+	// === 修改：從 Hole Filling 輸出的紋理進行顯示 ===
+	glBindTexture(GL_TEXTURE_2D, framebuffers.getHoleFilledTexture());
+	// ==============================================
+
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -759,8 +801,18 @@ void Application::RenderCompanionWindow()
 
 void Application::SaveCompanionWindowToYUV(int frameNr, std::string outputCameraName, bool saveAsPNG) {
 	unsigned char* image = new unsigned char[options.SCR_WIDTH * options.SCR_HEIGHT * 4];
-	framebuffers.bindCurrentBuffer();
+	
+	// === 修改：使用暫時的 FBO 來讀取 Hole Filling 的紋理像素 ===
+	GLuint tempFBO;
+	glGenFramebuffers(1, &tempFBO);
+	glBindFramebuffer(GL_FRAMEBUFFER, tempFBO);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, framebuffers.getHoleFilledTexture(), 0);
+
 	glReadPixels(0, 0, options.SCR_WIDTH, options.SCR_HEIGHT, GL_RGBA, GL_UNSIGNED_BYTE, image);
+	
+	glDeleteFramebuffers(1, &tempFBO);
+	// =========================================================
+
 	if (saveAsPNG || options.usePNGs) {
 		saveImage(image, options.SCR_WIDTH, options.SCR_HEIGHT, true, frameNr, options.outputPath + outputCameraName + ".png");
 	}
@@ -770,5 +822,4 @@ void Application::SaveCompanionWindowToYUV(int frameNr, std::string outputCamera
 	delete[] image;
 	return;
 }
-
 #endif APPLICATION_H

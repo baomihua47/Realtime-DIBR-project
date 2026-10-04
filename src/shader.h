@@ -1,11 +1,7 @@
 #ifndef SHADER_H
 #define SHADER_H
 
-
-//#include <glad/glad.h>
-//#include <GLFW/glfw3.h>
 #include <glm.hpp>
-
 #include <string>
 #include <fstream>
 #include <sstream>
@@ -22,6 +18,7 @@ public:
 	Shader() {
 		ID = 0;
 	}
+	
 	// constructor generates the shader on the fly
 	// ------------------------------------------------------------------------
 	bool init(const char* vertexPath, const char* fragmentPath, const char* geometryPath = nullptr)
@@ -113,8 +110,50 @@ public:
 		if (geometryPath != nullptr)
 			glDeleteShader(geometry);
 		return true;
-
 	}
+
+	// === 新增：編譯 Compute Shader 的能力 ===
+	bool initCompute(const char* computePath)
+	{
+		std::string computeCode;
+		std::ifstream cShaderFile;
+		cShaderFile.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+		try
+		{
+			cShaderFile.open(computePath);
+			std::stringstream cShaderStream;
+			cShaderStream << cShaderFile.rdbuf();
+			cShaderFile.close();
+			computeCode = cShaderStream.str();
+		}
+		catch (std::ifstream::failure)
+		{
+			std::cout << "ERROR::SHADER::FILE_NOT_SUCCESFULLY_READ: " << computePath << std::endl;
+			return false;
+		}
+
+		const char* cShaderCode = computeCode.c_str();
+		unsigned int compute;
+		
+		compute = glCreateShader(GL_COMPUTE_SHADER);
+		glShaderSource(compute, 1, &cShaderCode, NULL);
+		glCompileShader(compute);
+		if (!checkCompileErrors(compute, "COMPUTE")) {
+			return false;
+		}
+
+		ID = glCreateProgram();
+		glAttachShader(ID, compute);
+		glLinkProgram(ID);
+		if (!checkCompileErrors(ID, "PROGRAM")) {
+			return false;
+		}
+
+		glDeleteShader(compute);
+		return true;
+	}
+	// ==========================================
+
 	// activate the shader
 	// ------------------------------------------------------------------------
 	void use()
@@ -131,7 +170,6 @@ public:
 		uniformLocationMap[name] = location;
 		return location;
 	}
-
 
 	void setBool(const std::string& name, bool value) const
 	{

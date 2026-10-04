@@ -4,15 +4,15 @@
 	"Number_of_frames": 1,
     "cameras": [
         {
-			"NameColor": "example_output",
+            "NameColor": "v2",
             "Position": [
                 0.0,
-                0.0,
-                0.0
+                -0.068829,
+                0.069453
             ],
             "Rotation": [
                 0.0,
-                0.0,
+                -0.0,
                 0.0
             ],
             "Resolution": [
@@ -25,8 +25,8 @@
                 2410.34
             ],
             "Principle_point": [
-                1043.09,
-                480.55
+                1044.75,
+                478.78
             ]
         }
     ]

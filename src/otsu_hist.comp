@@ -1,0 +1,53 @@
+#version 430 core
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D warpedDepthTex;
+
+layout(std430, binding = 1) buffer HistogramBuffer {
+    uint histogram[256];
+};
+
+shared uint localHistogram[256];
+
+uniform float zNear = 0.1;
+uniform float zFar = 100.0;
+
+void main() {
+    uint localIndex = gl_LocalInvocationIndex;
+
+    // 1. 初始化 Shared Memory 本地直方圖
+    if (localIndex < 256u) {
+        localHistogram[localIndex] = 0u;
+    }
+
+    // 2. 由第一個 Workgroup 負責將全局 SSBO 直方圖清零 (極度重要！)
+    if (gl_WorkGroupID.x == 0u && gl_WorkGroupID.y == 0u && localIndex < 256u) {
+        histogram[localIndex] = 0u;
+    }
+
+    barrier(); // 等待所有記憶體清零完畢
+
+    ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 texSize = textureSize(warpedDepthTex, 0);
+
+    if (pixelCoord.x < texSize.x && pixelCoord.y < texSize.y) {
+        // 【修正】：讀取 .g 通道 (RG32F 中的 Depth)
+        float depth = texelFetch(warpedDepthTex, pixelCoord, 0).g;
+        
+        // 排除 9999.0 的破洞區域，僅統計有效深度
+        if (depth < 9990.0 && depth > 0.0) {
+            // 將實際深度映射至 0.0 ~ 1.0 區間後轉為 0~255 的 Bin
+            float normalizedDepth = clamp((depth - zNear) / (zFar - zNear), 0.0, 1.0);
+            uint bin = uint(clamp(normalizedDepth * 255.0, 0.0, 255.0));
+            
+            atomicAdd(localHistogram[bin], 1u);
+        }
+    }
+
+    barrier();
+
+    // 3. 將本地直方圖累加回全局 SSBO 直方圖
+    if (localIndex < 256u && localHistogram[localIndex] > 0u) {
+        atomicAdd(histogram[localIndex], localHistogram[localIndex]);
+    }
+}
